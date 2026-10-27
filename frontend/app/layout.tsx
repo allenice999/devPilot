@@ -3,8 +3,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "DevPilot · Streaming AI Lab",
-  description: "Streaming AI chat demo with SSE, tool events, and schema cards",
+  title: "DevPilot",
+  description: "DevPilot agent workspace",
 };
 
 export default function RootLayout({

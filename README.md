@@ -1,159 +1,105 @@
 # DevPilot
 
-DevPilot 是一个用于学习和演示 AI Agent 工程链路的浏览器应用。第一周完成了 Next.js、FastAPI、FastMCP 与 pgvector 的可运行底座；第二周加入多轮流式聊天、SSE 协议、模型适配、结构化输出和假工具事件。
-
-## 第二周能力
-
-- `POST /chat/stream` 以 SSE 推送 `token`、`message`、`done` 事件。
-- DeepSeek / Qwen OpenAI 兼容流式调用，支持超时、有限重试与降级。
-- 无 API Key 时默认使用本地演示模型，完整演示流式链路。
-- 3 个 System Prompt 预设：通用助手、翻译助手、代码审查。
-- 多轮历史回传、温度设置、上下文与费用估算。
-- Markdown、表格、代码块与复制按钮。
-- 假天气工具卡片：`tool_start -> tool_result`。
-- JSON Schema 结构化输出与运行时校验卡片。
-- 停止生成、重新生成、清除会话。
-- 自研 `ReadableStream + SSE parser`，不依赖现成 SSE 库。
-
-详细概念和程序调用链见 [第二周学习笔记](docs/week-02-streaming-chat.md)。
+DevPilot 是一个面向浏览器演示的 AI Agent 工作台。第一周只搭建最小可运行底座，后续再逐步加入对话工作区、React Flow 执行图、审批弹层、知识库和评测看板。
 
 ## 当前架构
 
 ```text
-Browser
-  | POST /chat/stream
-  v
-Next.js UI :3000
-  | ReadableStream -> lib/sse.ts -> RAF batch updates
-  v
-FastAPI :8000
-  | OpenAI-compatible /chat/completions
-  v
-DeepSeek / Qwen / Mock
+Browser (Next.js :3000)
+        |
+        | GET /health
+        v
+FastAPI backend :8000
+        |
+        | PostgreSQL 协议
+        v
+pgvector :5432
+
+MCP Inspector / MCP client
+        |
+        | Streamable HTTP /mcp
+        v
+FastMCP server :8001
 ```
 
-后端同时连接 pgvector，MCP Server 继续提供独立的 Streamable HTTP 工具入口。第五周会把本周的假天气工具替换为真实 MCP 工具。
+一条请求的完整链路是：浏览器加载 Next.js 页面，`useEffect` 请求后端 `/health`，FastAPI 返回 JSON，页面随后显示“后端已连接 ✅”。Agent 接入后，后续链路会扩展为浏览器 -> FastAPI Agent -> MCP Server -> 工具/数据库 -> 前端流式展示。
 
-## 启动
+## 一键启动
+
+环境要求：Docker Engine 和 Docker Compose v2。
 
 ```powershell
-docker compose up --build -d
+docker compose up --build
 ```
 
-访问：
+启动完成后：
 
 - 前端：<http://localhost:3000>
 - 后端健康检查：<http://localhost:8000/health>
-- 聊天配置：<http://localhost:8000/chat/meta>
-- MCP Inspector 地址：`http://localhost:8001/mcp`
+- MCP Streamable HTTP 入口：<http://localhost:8001/mcp>
 
 容器镜像通过专属轩辕镜像域 `mxmu9192alwcr342d1.xuanyuan.run` 拉取，该专属域无需执行 `docker login`。
 
-## 模型配置
-
-默认使用无需密钥的演示模型。需要使用真实模型时，复制环境变量模板并配置：
+四个容器都配置了健康检查：
 
 ```powershell
-Copy-Item .env.example .env
+docker compose ps
 ```
 
-DeepSeek：
-
-```dotenv
-LLM_PROVIDER=deepseek
-DEEPSEEK_API_KEY=your-key
-DEEPSEEK_MODEL=deepseek-chat
-```
-
-Qwen：
-
-```dotenv
-LLM_PROVIDER=qwen
-QWEN_API_KEY=your-key
-QWEN_MODEL=qwen-plus
-```
-
-可选降级：
-
-```dotenv
-LLM_FALLBACK_PROVIDER=mock
-LLM_ALLOW_MOCK_FALLBACK=true
-```
-
-不要把真实密钥提交到仓库。前后端均通过环境变量读取配置。
-
-## SSE 事件协议
-
-所有 `data` 都是 JSON：
-
-```text
-event: message
-data: {"id":"assistant_...","role":"assistant","provider":"mock"}
-
-event: tool_start
-data: {"id":"weather_...","name":"get_weather","input":{"city":"北京"}}
-
-event: tool_result
-data: {"id":"weather_...","result":{"temperature":"24°C"}}
-
-event: token
-data: {"text":"流式"}
-
-event: structured
-data: {"data":{"title":"...","summary":"...","key_points":[]}}
-
-event: done
-data: {"finish_reason":"stop","usage":{"total_tokens":123}}
-```
-
-发生错误时还有 `event: error`。流式接口仍返回 HTTP 200 后通过 SSE 事件报告上游模型错误，因此前端必须同时处理 HTTP 错误和流内错误。
-
-## 验收
-
-基础健康检查：
+## 验收后端与前端
 
 ```powershell
 Invoke-RestMethod http://localhost:8000/health
 ```
 
-自动验证长文本、假工具、取消和 10 次结构化输出：
+预期输出：
 
-```powershell
-docker compose exec -T backend python verify_stream.py
+```json
+{"status":"ok"}
 ```
 
-前端静态检查与生产构建：
+浏览器打开 <http://localhost:3000>，页面应显示 `后端已连接 ✅`。
+
+## 用 MCP Inspector 验收 ping
+
+启动本地 Inspector：
+
+```powershell
+npx @modelcontextprotocol/inspector
+```
+
+在界面中选择 `Streamable HTTP`，URL 填 `http://localhost:8001/mcp`，连接后：
+
+1. 在 Tools 中应看到 `ping`。
+2. 调用 `ping`，返回文本 `pong`。
+
+也可以用仓库里的客户端脚本直接验证：
+
+```powershell
+docker compose exec mcp-server python test_client.py
+```
+
+## 本地开发
+
+前端依赖已经写入 `frontend/package.json`，包括 shadcn/ui、zustand、React Flow、Markdown 渲染、React Hook Form 和 TanStack Query。
 
 ```powershell
 cd frontend
-pnpm run typecheck
-pnpm run build
+pnpm install
+pnpm run dev
 ```
 
-MCP：
+项目统一使用 pnpm，并通过 `frontend/.npmrc` 固定 npm 官方镜像 `https://registry.npmjs.org/`。
 
-```powershell
-docker compose exec -T mcp-server python test_client.py
-```
+本机运行 Next.js 时，`NEXT_PUBLIC_BACKEND_URL` 默认为 `http://localhost:8000`。如果前端部署在其他主机，需要把它改成浏览器能够访问的后端地址，并在后端 CORS 白名单中加入对应来源。
 
 ## 目录
 
 ```text
-backend/
-  main.py            FastAPI、SSE、工具演示、上下文组装
-  chat_models.py     请求协议与校验模型
-  prompts.py         System Prompt 与 JSON Schema
-  llm.py             模型适配、超时、重试、降级
-  sse.py             SSE 编码
-  verify_stream.py   流式验收脚本
-
-frontend/
-  app/               Next.js 页面
-  components/chat/   对话、Markdown、工具卡、结构化卡
-  lib/sse.ts         自研 SSE parser
-  lib/chat-types.ts  前端事件类型与运行时校验
-
-mcp/                 FastMCP 服务
-docs/                学习笔记
-infra/postgres/      PostgreSQL 与 pgvector 初始化
+backend/        FastAPI 服务
+frontend/       Next.js + shadcn/ui 前端
+mcp/            FastMCP 服务与测试客户端
+infra/postgres/ PostgreSQL 初始化脚本
+docker-compose.yml
 ```
+
